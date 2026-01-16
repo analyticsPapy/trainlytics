@@ -1,0 +1,386 @@
+// Prisma schema for Trainlytics with Supabase PostgreSQL
+
+generator client {
+  provider = "prisma-client-py"
+  interface = "asyncio"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum UserRole {
+  ATHLETE
+  COACH
+  BOTH
+}
+
+enum Provider {
+  STRAVA
+  GARMIN
+  POLAR
+  COROS
+  MANUAL
+}
+
+enum ActivityType {
+  RUN
+  RIDE
+  SWIM
+  WORKOUT
+  WALK
+  HIKE
+  OTHER
+}
+
+enum DataQuality {
+  FULL
+  PARTIAL
+  MINIMAL
+}
+
+enum WorkoutStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  SKIPPED
+  POSTPONED
+}
+
+enum PlanStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum CoachingStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+enum NotificationType {
+  WORKOUT_ASSIGNED
+  WORKOUT_COMMENT
+  ACTIVITY_COMMENT
+  PLAN_CREATED
+  COACHING_INVITATION
+  COACHING_ACCEPTED
+  SYNC_COMPLETED
+  SYNC_FAILED
+}
+
+// Models
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  hashedPassword  String    @map("hashed_password")
+  name            String?
+  avatarUrl       String?   @map("avatar_url")
+  role            UserRole  @default(ATHLETE)
+  timezone        String    @default("UTC")
+
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  lastLoginAt     DateTime? @map("last_login_at")
+
+  // Relationships
+  coachProfile       CoachProfile?
+  connectedAccounts  ConnectedAccount[]
+  activities         Activity[]
+  notifications      Notification[]
+
+  // Coaching relationships
+  coachingAsAthlete  AthleteCoach[]  @relation("AthleteRelation")
+  coachingAsCoach    AthleteCoach[]  @relation("CoachRelation")
+
+  // Plans
+  plansCreated       TrainingPlan[]  @relation("PlanCreator")
+  plansAssigned      TrainingPlan[]  @relation("PlanAthlete")
+
+  // Workouts
+  workoutsCreated    Workout[]       @relation("WorkoutCreator")
+  workoutsAssigned   Workout[]       @relation("WorkoutAthlete")
+
+  // Comments
+  comments           Comment[]
+
+  // Metrics
+  metrics            UserMetric[]
+
+  @@map("users")
+}
+
+model CoachProfile {
+  id              String   @id @default(uuid())
+  userId          String   @unique @map("user_id")
+  bio             String?
+  specialties     String[]
+  maxAthletes     Int?     @map("max_athletes")
+  acceptingNew    Boolean  @default(true) @map("accepting_new")
+
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("coach_profiles")
+}
+
+model AthleteCoach {
+  id          String          @id @default(uuid())
+  athleteId   String          @map("athlete_id")
+  coachId     String          @map("coach_id")
+  status      CoachingStatus  @default(PENDING)
+  permissions Json?
+  startDate   DateTime?       @map("start_date")
+  endDate     DateTime?       @map("end_date")
+
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  athlete     User            @relation("AthleteRelation", fields: [athleteId], references: [id], onDelete: Cascade)
+  coach       User            @relation("CoachRelation", fields: [coachId], references: [id], onDelete: Cascade)
+
+  @@unique([athleteId, coachId])
+  @@map("athlete_coaches")
+}
+
+model ConnectedAccount {
+  id                String    @id @default(uuid())
+  userId            String    @map("user_id")
+  provider          Provider
+  providerUserId    String    @map("provider_user_id")
+  providerUsername  String?   @map("provider_username")
+  accessToken       String    @map("access_token")  // Encrypted
+  refreshToken      String?   @map("refresh_token") // Encrypted
+  tokenExpiresAt    DateTime? @map("token_expires_at")
+  syncEnabled       Boolean   @default(true) @map("sync_enabled")
+  isActive          Boolean   @default(true) @map("is_active")
+  lastSyncAt        DateTime? @map("last_sync_at")
+  lastSyncStatus    String?   @map("last_sync_status")
+
+  connectedAt     DateTime  @default(now()) @map("connected_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activities      Activity[]
+
+  @@unique([userId, provider])
+  @@map("connected_accounts")
+}
+
+model Activity {
+  id                    String        @id @default(uuid())
+  userId                String        @map("user_id")
+  connectedAccountId    String?       @map("connected_account_id")
+
+  // Source tracking
+  provider              Provider
+  providerActivityId    String        @map("provider_activity_id")
+  dataQuality           DataQuality   @default(FULL) @map("data_quality")
+
+  // Basic metadata
+  name                  String
+  description           String?
+  activityType          ActivityType  @map("activity_type")
+  sportType             String?       @map("sport_type")
+
+  // Date & Time
+  startDate             DateTime      @map("start_date")
+  endDate               DateTime?     @map("end_date")
+  timezone              String?
+
+  // Core metrics
+  durationSeconds       Int?          @map("duration_seconds")
+  distanceMeters        Float?        @map("distance_meters")
+  movingTimeSeconds     Int?          @map("moving_time_seconds")
+
+  // Elevation
+  elevationGainMeters   Float?        @map("elevation_gain_meters")
+  elevationLossMeters   Float?        @map("elevation_loss_meters")
+
+  // Heart Rate
+  avgHeartRate          Int?          @map("avg_heart_rate")
+  maxHeartRate          Int?          @map("max_heart_rate")
+
+  // Power
+  avgPower              Float?        @map("avg_power")
+  maxPower              Float?        @map("max_power")
+  normalizedPower       Float?        @map("normalized_power")
+
+  // Speed
+  avgSpeedMps           Float?        @map("avg_speed_mps")
+  maxSpeedMps           Float?        @map("max_speed_mps")
+
+  // Other
+  avgCadence            Float?        @map("avg_cadence")
+  avgTemperature        Float?        @map("avg_temperature")
+  calories              Int?
+
+  // GPS
+  startLatlng           Json?         @map("start_latlng")
+  endLatlng             Json?         @map("end_latlng")
+
+  // Flags
+  isManual              Boolean       @default(false) @map("is_manual")
+  sharedWithCoach       Boolean       @default(true) @map("shared_with_coach")
+
+  // Data
+  availableMetrics      Json?         @map("available_metrics")
+  rawData               Json          @map("raw_data")
+  processedData         Json?         @map("processed_data")
+
+  // Timestamps
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
+  syncedAt              DateTime      @default(now()) @map("synced_at")
+
+  user                  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectedAccount      ConnectedAccount? @relation(fields: [connectedAccountId], references: [id], onDelete: SetNull)
+  workout               Workout?
+  comments              Comment[]
+
+  @@unique([userId, providerActivityId])
+  @@index([userId])
+  @@index([startDate])
+  @@index([activityType])
+  @@map("activities")
+}
+
+model TrainingPlan {
+  id          String      @id @default(uuid())
+  createdBy   String      @map("created_by")
+  athleteId   String?     @map("athlete_id")
+  name        String
+  description String?
+  startDate   DateTime    @map("start_date")
+  endDate     DateTime    @map("end_date")
+  weeksCount  Int         @map("weeks_count")
+  isTemplate  Boolean     @default(false) @map("is_template")
+  status      PlanStatus  @default(DRAFT)
+
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  creator     User        @relation("PlanCreator", fields: [createdBy], references: [id])
+  athlete     User?       @relation("PlanAthlete", fields: [athleteId], references: [id], onDelete: SetNull)
+  workouts    Workout[]
+
+  @@map("training_plans")
+}
+
+model Workout {
+  id              String        @id @default(uuid())
+  trainingPlanId  String?       @map("training_plan_id")
+  createdBy       String        @map("created_by")
+  athleteId       String        @map("athlete_id")
+
+  // Workout info
+  title           String
+  description     String?
+  workoutType     String        @map("workout_type")
+
+  // Scheduling
+  scheduledDate   DateTime      @map("scheduled_date")
+  scheduledTime   String?       @map("scheduled_time")
+
+  // Target metrics
+  targetDuration  Int?          @map("target_duration")
+  targetDistance  Float?        @map("target_distance")
+  targetPace      Float?        @map("target_pace")
+  targetHeartRate Int?          @map("target_heart_rate")
+  targetPower     Float?        @map("target_power")
+
+  // Structured workout
+  structure       Json?
+
+  // Completion
+  status          WorkoutStatus @default(PLANNED)
+  completedAt     DateTime?     @map("completed_at")
+  activityId      String?       @unique @map("activity_id")
+
+  // Feedback
+  athleteNotes    String?       @map("athlete_notes")
+  coachFeedback   String?       @map("coach_feedback")
+  rpe             Int?          // Rate of Perceived Exertion (1-10)
+
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  trainingPlan    TrainingPlan? @relation(fields: [trainingPlanId], references: [id], onDelete: SetNull)
+  creator         User          @relation("WorkoutCreator", fields: [createdBy], references: [id])
+  athlete         User          @relation("WorkoutAthlete", fields: [athleteId], references: [id], onDelete: Cascade)
+  activity        Activity?     @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  comments        Comment[]
+
+  @@index([athleteId])
+  @@index([scheduledDate])
+  @@index([status])
+  @@map("workouts")
+}
+
+model Comment {
+  id          String   @id @default(uuid())
+  authorId    String   @map("author_id")
+  workoutId   String?  @map("workout_id")
+  activityId  String?  @map("activity_id")
+  content     String
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  author      User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  workout     Workout? @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+  activity    Activity? @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  @@map("comments")
+}
+
+model Notification {
+  id          String            @id @default(uuid())
+  userId      String            @map("user_id")
+  type        NotificationType
+  title       String
+  message     String
+  actionUrl   String?           @map("action_url")
+  isRead      Boolean           @default(false) @map("is_read")
+
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model UserMetric {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  date            DateTime
+  periodType      String   @map("period_type") // daily, weekly, monthly
+
+  totalDistance   Float?   @map("total_distance")
+  totalDuration   Int?     @map("total_duration")
+  activityCount   Int?     @map("activity_count")
+
+  // Training Load Metrics
+  fitnessLevel    Float?   @map("fitness_level")   // CTL (Chronic Training Load)
+  fatigueLevel    Float?   @map("fatigue_level")   // ATL (Acute Training Load)
+  form            Float?   // TSB (Training Stress Balance)
+
+  calculatedAt    DateTime @default(now()) @map("calculated_at")
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date, periodType])
+  @@index([userId])
+  @@index([date])
+  @@map("user_metrics")
+}
